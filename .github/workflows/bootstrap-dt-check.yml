@@ -33,4 +33,4 @@ jobs:
             --output /dev/null \
             "${GITHUB_API_URL}/repos/grigsargsian/wb-dt-scheduler/actions/workflows/wb-dt-check.yml/dispatches"
 
-# diagnostic retry 2
+# diagnostic retry 3
