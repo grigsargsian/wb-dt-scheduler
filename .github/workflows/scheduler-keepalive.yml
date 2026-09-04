@@ -1,10 +1,6 @@
 name: Keep scheduler active
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/scheduler-keepalive.yml
   schedule:
     - cron: "23 3 1 * *"
   workflow_dispatch:
