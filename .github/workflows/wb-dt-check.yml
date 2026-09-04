@@ -1,0 +1,52 @@
+name: WB DT check
+
+on:
+  schedule:
+    - cron: "2/5 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: wb-dt-scheduler
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    if: ${{ github.repository == 'grigsargsian/wb-dt-scheduler' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      id-token: write
+    env:
+      OIDC_AUDIENCE: wb-dt-scheduler-trigger
+      RELAY_URL: https://wb-dt-scheduler-trigger.gogortumanyan987.chatgpt.site/run
+
+    steps:
+      - name: Trigger DT scheduler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          oidc_file="$(mktemp)"
+          trap 'rm -f "$oidc_file"' EXIT
+
+          curl --fail --silent --show-error \
+            --retry 2 --retry-all-errors \
+            --connect-timeout 10 --max-time 30 \
+            --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}" \
+            > "$oidc_file"
+
+          oidc_token="$(
+            jq -er '.value | select(type == "string" and length > 100)' \
+              "$oidc_file"
+          )"
+
+          curl --fail --silent --show-error \
+            --retry 2 --retry-all-errors --retry-delay 3 \
+            --connect-timeout 10 --max-time 140 \
+            --request POST \
+            --header "Authorization: Bearer ${oidc_token}" \
+            --output /dev/null \
+            "${RELAY_URL}"
