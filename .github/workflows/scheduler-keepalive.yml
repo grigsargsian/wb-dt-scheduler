@@ -1,0 +1,60 @@
+name: Keep scheduler active
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/scheduler-keepalive.yml
+  schedule:
+    - cron: "23 3 1 * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  keepalive:
+    if: ${{ github.repository == 'grigsargsian/wb-dt-scheduler' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: write
+
+    steps:
+      - name: Record monthly repository activity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+
+          response_file="$(mktemp)"
+          payload_file="$(mktemp)"
+          trap 'rm -f "$response_file" "$payload_file"' EXIT
+
+          api_url="${GITHUB_API_URL}/repos/grigsargsian/wb-dt-scheduler/contents/.github/scheduler-keepalive"
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "${api_url}?ref=main" > "$response_file"
+
+          current_sha="$(jq -er '.sha' "$response_file")"
+          marker="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          encoded_marker="$(printf '%s\n' "$marker" | base64 -w0)"
+
+          jq -n \
+            --arg message "Keep scheduler active: ${marker}" \
+            --arg content "$encoded_marker" \
+            --arg sha "$current_sha" \
+            '{message: $message, content: $content, sha: $sha, branch: "main"}' \
+            > "$payload_file"
+
+          curl --fail --silent --show-error \
+            --request PUT \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --header "Content-Type: application/json" \
+            --data-binary "@$payload_file" \
+            --output /dev/null \
+            "$api_url"
