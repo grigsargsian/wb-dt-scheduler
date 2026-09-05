@@ -1,27 +1,29 @@
 name: WB DT check
 
 on:
-  # GitHub schedules are best-effort. Staggered valid 5-minute schedules make
-  # the closed-page trigger redundant when an individual scheduled event drops.
+  # GitHub cron is best-effort and can be delayed. Each run stays alive as a
+  # watchdog and calls the relay every minute until the next scheduled run
+  # replaces it. This keeps closed-page checks running between delayed events.
   schedule:
-    - cron: "*/5 * * * *"
-    - cron: "1-59/5 * * * *"
-    - cron: "2-59/5 * * * *"
-    - cron: "3-59/5 * * * *"
-    - cron: "4-59/5 * * * *"
+    - cron: "2/5 * * * *"
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/wb-dt-check.yml"
 
 permissions: {}
 
 concurrency:
   group: wb-dt-scheduler
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   trigger:
     if: ${{ github.repository == 'grigsargsian/wb-dt-scheduler' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 355
     permissions:
       id-token: write
     env:
@@ -29,30 +31,51 @@ jobs:
       RELAY_URL: https://wb-dt-scheduler-trigger.gogortumanyan987.chatgpt.site/run
 
     steps:
-      - name: Trigger DT scheduler
+      - name: Keep DT scheduler running
         shell: bash
         run: |
-          set -Eeuo pipefail
+          set -u -o pipefail
 
-          oidc_file="$(mktemp)"
-          trap 'rm -f "$oidc_file"' EXIT
+          trigger_once() {
+            local oidc_file oidc_token
+            oidc_file="$(mktemp)"
 
-          curl --fail --silent --show-error \
-            --retry 2 --retry-all-errors \
-            --connect-timeout 10 --max-time 30 \
-            --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}" \
-            > "$oidc_file"
+            if ! curl --fail --silent --show-error \
+              --retry 2 --retry-all-errors \
+              --connect-timeout 10 --max-time 30 \
+              --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}" \
+              > "$oidc_file"; then
+              rm -f "$oidc_file"
+              return 1
+            fi
 
-          oidc_token="$(
-            jq -er '.value | select(type == "string" and length > 100)' \
-              "$oidc_file"
-          )"
+            if ! oidc_token="$(
+              jq -er '.value | select(type == "string" and length > 100)' \
+                "$oidc_file"
+            )"; then
+              rm -f "$oidc_file"
+              return 1
+            fi
+            rm -f "$oidc_file"
 
-          curl --fail --silent --show-error \
-            --retry 2 --retry-all-errors --retry-delay 3 \
-            --connect-timeout 10 --max-time 140 \
-            --request POST \
-            --header "Authorization: Bearer ${oidc_token}" \
-            --output /dev/null \
-            "${RELAY_URL}"
+            curl --fail --silent --show-error \
+              --retry 2 --retry-all-errors --retry-delay 3 \
+              --connect-timeout 10 --max-time 140 \
+              --request POST \
+              --header "Authorization: Bearer ${oidc_token}" \
+              --output /dev/null \
+              "${RELAY_URL}"
+          }
+
+          for attempt in $(seq 1 330); do
+            if trigger_once; then
+              echo "DT scheduler trigger #${attempt} succeeded at $(date -u +%FT%TZ)"
+            else
+              echo "::warning::DT scheduler trigger #${attempt} failed at $(date -u +%FT%TZ); retrying in one minute"
+            fi
+
+            if [ "$attempt" -lt 330 ]; then
+              sleep 60
+            fi
+          done
